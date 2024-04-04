@@ -2,59 +2,83 @@ import { InjectRedis } from '@nestjs-modules/ioredis';
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
+import { InjectRepository } from '@nestjs/typeorm';
 import * as bcrypt from 'bcrypt';
+import { CookieOptions, Response } from 'express';
 import { Redis } from 'ioredis';
 import { User } from 'src/users/users.entity';
-import { UsersService } from 'src/users/users.service';
 import { UserLoginDto, UserRegisterDto } from 'src/users/users.types';
+import { Repository } from 'typeorm';
 
 @Injectable()
 export class AuthService {
     constructor(
-        private readonly usersService: UsersService,
+        private configService: ConfigService,
         private readonly jwtService: JwtService,
+        @InjectRepository(User) private usersRepository: Repository<User>,
         @InjectRedis() private readonly redis: Redis,
     ) {}
 
-    async login(configService: ConfigService, loginDto: UserLoginDto): Promise<{ accessToken: string; refreshToken: string; user: User }> {
+    private readonly tokenCookieOptions: CookieOptions = {
+        maxAge: this.configService.get('JWT_REFRESH_MINUTES') * 60 * 1000,
+        httpOnly: true,
+        sameSite: 'none',
+        secure: true,
+    };
+
+    async login(res: Response, loginDto: UserLoginDto): Promise<{ accessToken: string; refreshToken: string; user: User }> {
         const { username, password } = loginDto;
-        const user = await this.usersService.findOne({ username });
+
+        const user = await this.usersRepository.findOneBy({ username });
         if (!user) throw new UnauthorizedException(null, 'User not found');
         if (!(await this.comparePass(password, user.password))) throw new UnauthorizedException(null, 'Wrong password');
-        const { accessToken, refreshToken } = await this.generateTokens(configService, { sub: user.id });
+
+        const { accessToken, refreshToken } = await this.generateTokens({ sub: user.id });
+        res.cookie('refreshToken', refreshToken, this.tokenCookieOptions);
         return { accessToken, refreshToken, user };
     }
 
-    async register(configService: ConfigService, registerDto: UserRegisterDto): Promise<{ accessToken: string; refreshToken: string; user: User }> {
+    async register(res: Response, registerDto: UserRegisterDto): Promise<{ accessToken: string; refreshToken: string; user: User }> {
         const { email, username, password } = registerDto;
-        let candidate = await this.usersService.findOne({ email });
+
+        let candidate = await this.usersRepository.findOneBy({ email });
         if (candidate) throw new UnauthorizedException(null, 'User with this email already exists');
-        candidate = await this.usersService.findOne({ username });
+        candidate = await this.usersRepository.findOneBy({ username });
         if (candidate) throw new UnauthorizedException(null, 'User with this username already exists');
+
         const hashPass = await this.hashPass(password);
-        const user = await this.usersService.create({ username, email, password: hashPass });
-        const { accessToken, refreshToken } = await this.generateTokens(configService, { sub: user.id });
+        let user = await this.usersRepository.create({ username, email, password: hashPass });
+        user = await this.usersRepository.save(user);
+
+        const { accessToken, refreshToken } = await this.generateTokens({ sub: user.id });
+        res.cookie('refreshToken', refreshToken, this.tokenCookieOptions);
         return { accessToken, refreshToken, user };
     }
 
-    async refresh(configService: ConfigService, token: any): Promise<{ accessToken: string; refreshToken: string; user: User }> {
+    async refresh(res: Response, token: any): Promise<{ accessToken: string; refreshToken: string; user: User }> {
         if (!token) throw new UnauthorizedException();
         if (!(await this.isTokenExists(token))) throw new UnauthorizedException();
         await this.removeToken(token);
+
         try {
-            const payload = this.jwtService.verify(token, { secret: configService.get('JWT_REFRESH_SECRET') || 'secret_refresh_key' });
+            const payload = this.jwtService.verify(token, { secret: this.configService.get('JWT_REFRESH_SECRET') || 'secret_refresh_key' });
             const { sub } = payload;
-            const user = await this.usersService.findOne({ id: sub });
+
+            const user = await this.usersRepository.findOneBy({ id: sub });
             if (!user) throw new UnauthorizedException();
-            const { accessToken, refreshToken } = await this.generateTokens(configService, { sub: user.id });
+
+            const { accessToken, refreshToken } = await this.generateTokens(this.configService, { sub: user.id });
+            res.cookie('refreshToken', refreshToken, this.tokenCookieOptions);
             return { accessToken, refreshToken, user };
         } catch {
+            res.clearCookie('refreshToken', { ...this.tokenCookieOptions, maxAge: 0 });
             throw new UnauthorizedException();
         }
     }
 
-    async logout(token: any) {
+    async logout(res: Response, token: any) {
         await this.removeToken(token);
+        res.clearCookie('refreshToken', { ...this.tokenCookieOptions, maxAge: 0 });
     }
     private async isTokenExists(token: string): Promise<boolean> {
         return (await this.redis.get(token)) ? true : false;
@@ -68,22 +92,22 @@ export class AuthService {
         return await bcrypt.compare(password, encrypted);
     }
 
-    private async generateTokens(configService: ConfigService, accessPayload: object, refreshPayload?: object): Promise<{ accessToken: string; refreshToken: string }> {
+    private async generateTokens(accessPayload: object, refreshPayload?: object): Promise<{ accessToken: string; refreshToken: string }> {
         refreshPayload = refreshPayload ? refreshPayload : accessPayload;
         const accessToken = this.jwtService.sign(accessPayload, {
-            secret: configService.get('JWT_ACCESS_SECRET') || 'secret_access_key',
-            expiresIn: (configService.get('JWT_ACCESS_MINUTES') || 5) * 60,
+            secret: this.configService.get('JWT_ACCESS_SECRET') || 'secret_access_key',
+            expiresIn: (this.configService.get('JWT_ACCESS_MINUTES') || 5) * 60,
         });
         const refreshToken = this.jwtService.sign(refreshPayload, {
-            secret: configService.get('JWT_REFRESH_SECRET') || 'secret_refresh_key',
-            expiresIn: (configService.get('JWT_REFRESH_MINUTES') || 60 * 24 * 30) * 60,
+            secret: this.configService.get('JWT_REFRESH_SECRET') || 'secret_refresh_key',
+            expiresIn: (this.configService.get('JWT_REFRESH_MINUTES') || 60 * 24 * 30) * 60,
         });
-        await this.saveToken(configService, refreshToken);
+        await this.saveToken(refreshToken);
         return { accessToken, refreshToken };
     }
 
-    private async saveToken(configService: ConfigService, token: string) {
-        await this.redis.setex(token, (configService.get('JWT_REFRESH_MINUTES') || 60 * 24 * 30) * 60, 'refresh_token');
+    private async saveToken(token: string) {
+        await this.redis.setex(token, (this.configService.get('JWT_REFRESH_MINUTES') || 60 * 24 * 30) * 60, 'refresh_token');
     }
 
     private async removeToken(token: string) {
