@@ -26,19 +26,19 @@ export class AuthService {
         secure: true,
     };
 
-    async login(res: Response, loginDto: UserLoginDto): Promise<{ accessToken: string; refreshToken: string; user: User }> {
+    async login(res: Response, loginDto: UserLoginDto): Promise<{ accessToken: string; user: User }> {
         const { username, password } = loginDto;
 
         const user = await this.usersRepository.findOneBy({ username });
         if (!user) throw new UnauthorizedException(null, 'User not found');
-        if (!(await this.comparePass(password, user.password))) throw new UnauthorizedException(null, 'Wrong password');
+        if (!(await this.comparePass(password, user.password))) throw new UnauthorizedException(null, 'Incorrect prev_password');
 
         const { accessToken, refreshToken } = await this.generateTokens({ sub: user.id });
         res.cookie('refreshToken', refreshToken, this.tokenCookieOptions);
-        return { accessToken, refreshToken, user };
+        return { accessToken, user };
     }
 
-    async register(res: Response, registerDto: UserRegisterDto): Promise<{ accessToken: string; refreshToken: string; user: User }> {
+    async register(res: Response, registerDto: UserRegisterDto): Promise<{ accessToken: string; user: User }> {
         const { email, username, password } = registerDto;
 
         let candidate = await this.usersRepository.findOneBy({ email });
@@ -52,10 +52,10 @@ export class AuthService {
 
         const { accessToken, refreshToken } = await this.generateTokens({ sub: user.id });
         res.cookie('refreshToken', refreshToken, this.tokenCookieOptions);
-        return { accessToken, refreshToken, user };
+        return { accessToken, user };
     }
 
-    async refresh(res: Response, token: any): Promise<{ accessToken: string; refreshToken: string; user: User }> {
+    async refresh(res: Response, token: any): Promise<{ accessToken: string; user: User }> {
         if (!token) throw new UnauthorizedException();
         if (!(await this.isTokenExists(token))) throw new UnauthorizedException();
         await this.removeToken(token);
@@ -69,7 +69,7 @@ export class AuthService {
 
             const { accessToken, refreshToken } = await this.generateTokens(this.configService, { sub: user.id });
             res.cookie('refreshToken', refreshToken, this.tokenCookieOptions);
-            return { accessToken, refreshToken, user };
+            return { accessToken, user };
         } catch {
             res.clearCookie('refreshToken', { ...this.tokenCookieOptions, maxAge: 0 });
             throw new UnauthorizedException();

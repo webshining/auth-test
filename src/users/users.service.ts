@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { isEmail } from 'class-validator';
 import { Response } from 'express';
@@ -17,11 +17,20 @@ export class UsersService {
     async patch(user: User, userPatchDto: UserPatchDto) {
         const { username, email, prev_password, password } = userPatchDto;
 
-        if (username && (await this.usersRepository.findOneBy({ username }))) throw new UnauthorizedException(null, 'User with this username already exists');
-        if (email && (await this.usersRepository.findOneBy({ email }))) throw new UnauthorizedException(null, 'User with this email already exists');
-        if (email && isEmail(email)) user.email = email;
-        if (username) user.username = username;
-        if (password && prev_password && (await this.authService.comparePass(prev_password, user.password))) user.password = await this.authService.hashPass(password);
+        if (username) {
+            if (username !== user.username && (await this.usersRepository.findOneBy({ username }))) throw new ConflictException(null, 'User with this username already exists');
+            user.username = username;
+        }
+        if (email) {
+            if (!isEmail(email)) throw new BadRequestException(null, 'Invalid email format');
+            if (email !== user.email && (await this.usersRepository.findOneBy({ email }))) throw new ConflictException(null, 'User with this email already exists');
+            user.email = email;
+        }
+        if (prev_password || password) {
+            if (!prev_password || !password) throw new BadRequestException(null, "Missing 'password' or 'prev_password'");
+            if (!(await this.authService.comparePass(prev_password, user.password))) throw new UnauthorizedException(null, 'Incorrect prev_password');
+            user.password = await this.authService.hashPass(password);
+        }
 
         return await this.usersRepository.save(user);
     }
