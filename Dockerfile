@@ -1,5 +1,5 @@
 # build app
-FROM node:16-slim As development
+FROM node:21-slim As development
 
 WORKDIR /app
 
@@ -12,7 +12,7 @@ COPY . .
 RUN npm run build
 
 # run builded app
-FROM node:16-slim As production
+FROM node:21-slim As production
 
 ARG NODE_ENV=prod
 ENV NODE_ENV=${NODE_ENV}
@@ -25,4 +25,4 @@ COPY --from=development /app/*.env .
 
 RUN npm install
 
-CMD ["node", "dist/main"]
+CMD ["npm", "run", "start:prod"]

@@ -5,14 +5,28 @@ services:
     build: .
     restart: always
     ports:
-      - 4000:4000
+      - 6000:6000
     depends_on:
-      - database
-  database:
-    image: postgres
+      - postgres
+      - redis
+  postgres:
+    image: postgres:alpine
     restart: always
-    ports:
-      - 5432:5432
     environment:
-      - POSTGRES_DB=postgres
+      - POSTGRES_DB=database
+      - POSTGRES_USER=admin
       - POSTGRES_PASSWORD=admin
+    volumes:
+      - postgres:/var/lib/postgresql
+  redis:
+    image: redis:alpine
+    command: redis-server --appendonly yes
+    environment:
+      - REDIS_REPLICATION_MODE=master
+    volumes:
+      - redis:/data
+
+      
+volumes:
+  postgres:
+  redis:
