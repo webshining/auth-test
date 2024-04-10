@@ -59,7 +59,6 @@ export class AuthService {
         if (!token) throw new UnauthorizedException();
         if (!(await this.isTokenExists(token))) throw new UnauthorizedException();
         await this.removeToken(token);
-
         try {
             const payload = this.jwtService.verify(token, { secret: this.configService.get('JWT_REFRESH_SECRET') || 'secret_refresh_key' });
             const { sub } = payload;
@@ -67,10 +66,10 @@ export class AuthService {
             const user = await this.usersRepository.findOneBy({ id: sub });
             if (!user) throw new UnauthorizedException();
 
-            const { accessToken, refreshToken } = await this.generateTokens(this.configService, { sub: user.id });
+            const { accessToken, refreshToken } = await this.generateTokens({ sub: user.id });
             res.cookie('refreshToken', refreshToken, this.tokenCookieOptions);
             return { accessToken, user };
-        } catch {
+        } catch (e) {
             res.clearCookie('refreshToken', { ...this.tokenCookieOptions, maxAge: 0 });
             throw new UnauthorizedException();
         }
